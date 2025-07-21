@@ -11,6 +11,7 @@ from jaxtyping import Float, Int
 import numpy.typing as npt
 import torch
 from torch import Tensor
+import logging
 
 
 def run_linear(
@@ -564,10 +565,33 @@ def get_tokenizer(
     raise NotImplementedError
 
 
+def _pre_tokenize_boundary(input_path, start, end, special_tokens, pretokenization_pat) -> dict[tuple[bytes], int]:
+    result: dict[tuple[bytes], int] = defaultdict(int)
+    from tqdm import tqdm
+    with open(input_path, "rb") as f:
+        f.seek(start)
+        chunk = f.read(end - start).decode("utf-8", errors="ignore")
+
+        # split the chunk according to the special token
+        pattern = "|".join(re.escape(token) for token in special_tokens)
+        documents = re.split(pattern, chunk)
+
+        for document in tqdm(documents, desc=f"pre_tokenization: start={start}, end={end}"):
+            # perform pre tokenization
+            for match in re.finditer(pretokenization_pat, document):
+                pretoken = match.group()
+                pretoken_bytes = pretoken.encode('utf-8')
+                pretoken_bytes_tuple = tuple(bytes([byte]) for byte in pretoken_bytes)
+                result[pretoken_bytes_tuple] += 1
+
+        return result
+
+
 def run_train_bpe(
         input_path: str | os.PathLike,
         vocab_size: int,
         special_tokens: list[str],
+        multiprocess_num: int = 1,
         **kwargs,
 ) -> tuple[dict[int, bytes], list[tuple[bytes, bytes]]]:
     """Given the path to an input corpus, run train a BPE tokenizer and
@@ -576,6 +600,7 @@ def run_train_bpe(
     Args:
         input_path (str | os.PathLike): Path to BPE tokenizer training data.
         vocab_size (int): Total number of items in the tokenizer's vocabulary (including special tokens).
+        multiprocess_num: parallel processes for running pre tokenization
         special_tokens (list[str]): A list of string special tokens to be added to the tokenizer vocabulary.
             These strings will never be split into multiple tokens, and will always be
             kept as a single token. If these special tokens occur in the `input_path`,
@@ -592,12 +617,7 @@ def run_train_bpe(
                 Merges are ordered by order of creation.
     """
 
-    tqdm_enabled = "tqdm" in kwargs and kwargs["tqdm"]
-    if tqdm_enabled:
-        from tqdm import tqdm
-    else:
-        tqdm = lambda x: x
-
+    import multiprocessing as mp
     from cs336_basics.pretokenization import find_chunk_boundaries, run_train_bpe_with_pretokenization_dict
 
     vocab: dict[int, bytes] = {x: bytes([x]) for x in range(256)}
@@ -612,27 +632,30 @@ def run_train_bpe(
         vocab_set.add(encoded_special_token)
 
     with open(input_path, "rb") as f:
-        chunk = f.read().decode("utf-8")
+        boundaries = find_chunk_boundaries(f, multiprocess_num, "<|endoftext|>".encode("utf-8"))
 
-        # split the chunk according to the special token
-        pattern = "|".join(re.escape(token) for token in special_tokens)
-        documents = re.split(pattern, chunk)
+    logging.info(f"running pre tokenization")
 
-        # run pre-tokenization sequentially
-        pretokenization_pat = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
+    pretoken_to_count: dict[tuple[bytes], int] = defaultdict(int)
+    pretokenization_pat = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
 
-        pretoken_to_count: dict[tuple[bytes], int] = defaultdict(int)
+    with mp.Pool(processes=multiprocess_num) as pool:
+        async_results = []
+        for start, end in zip(boundaries[:-1], boundaries[1:]):
+            # run pre-tokenization tasks in parallel
+            async_result = pool.apply_async(_pre_tokenize_boundary,
+                                            args=(input_path, start, end, special_tokens, pretokenization_pat))
+            async_results.append(async_result)
 
-        for document in tqdm(documents):
-            # perform pre tokenization
-            for match in re.finditer(pretokenization_pat, document):
-                pretoken = match.group()
-                pretoken_bytes = pretoken.encode('utf-8')
-                pretoken_bytes_tuple = tuple(bytes([byte]) for byte in pretoken_bytes)
-                pretoken_to_count[pretoken_bytes_tuple] += 1
+        for async_result in async_results:
+            result = async_result.get()
 
-        vocab, vocab_set, merges = run_train_bpe_with_pretokenization_dict(pretoken_to_count, vocab, vocab_set,
-                                                                           vocab_size)
-        total_merges.extend(merges)
+            for pretoken, count in result.items():
+                pretoken_to_count[pretoken] += count
+
+    logging.info(f"running bpe training after pre tokenization")
+    vocab, vocab_set, merges = run_train_bpe_with_pretokenization_dict(pretoken_to_count, vocab, vocab_set,
+                                                                       vocab_size)
+    total_merges.extend(merges)
 
     return vocab, total_merges

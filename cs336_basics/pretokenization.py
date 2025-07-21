@@ -1,4 +1,5 @@
 import os
+import logging
 from collections import defaultdict
 from typing import BinaryIO
 
@@ -26,12 +27,18 @@ def run_train_bpe_with_pretokenization_dict(
     """
     # find most frequent bytes pair and merge
     merges = []
-    while len(vocab) < vocab_size:
-        merge_to_count: dict[tuple[bytes, bytes], int] = defaultdict(int)
+    merge_to_count: dict[tuple[bytes, bytes], int] = defaultdict(int)
 
-        for pretoken, count in pretoken_to_count.items():
-            for first_bytes, second_bytes in zip(pretoken[:-1], pretoken[1:]):
-                merge_to_count[(first_bytes, second_bytes)] += count
+    # build initial pair to affected tokens
+    pair_to_affected_tokens: dict[tuple, set] = defaultdict(set)
+
+    for pretoken, count in pretoken_to_count.items():
+        for i in range(len(pretoken) - 1):
+            pair = (pretoken[i], pretoken[i + 1])
+            pair_to_affected_tokens[pair].add(pretoken)
+            merge_to_count[pair] += count
+
+    while len(vocab_set) < vocab_size:
 
         if not merge_to_count:
             break
@@ -45,9 +52,105 @@ def run_train_bpe_with_pretokenization_dict(
             vocab_set.add((first_bytes + second_bytes))
 
         # update pre-tokenization result with merged pair
-        pretoken_to_count = merge_pretoken_to_count(pretoken_to_count, pair)
+        pretoken_to_count = merge_pretoken_to_count_with_cache(pretoken_to_count,
+                                                               pair, pair_to_affected_tokens,
+                                                               merge_to_count)
+        logging.info(f"train_bpe progress: current vocab size {len(vocab_set)} / target size {vocab_size}")
 
     return vocab, vocab_set, merges
+
+
+def merge_pretoken_to_count_with_cache(pretoken_to_count: dict[tuple[bytes], int], pair: tuple[bytes, bytes],
+                                       pair_to_affected_tokens: dict[tuple, set],
+                                       merge_to_count: dict[tuple[bytes, bytes], int]):
+    """
+    Update dictionary `pretoken_to_count` after giving the most frequent bytes pair. It maintains a cache of map
+    from merge pairs to a set of affected pre tokens. It modifies this map `pair_to_affected_tokens` and `merge_to_count` in place.
+
+    Args:
+        pretoken_to_count: a map from pretoken (basically a tuple of bytes) to the occurrence count
+            An example is {(l, o, w): 5, (l, o, w, e, s, t): 2, (w, i, d, e, s, t): 3, (n, e, w, e, s, t): 6}
+        pair:
+            Pair of bytes (A and B) to be merged. An example is (s, t)
+    Returns:
+        Returns a new version of pretoken_to_count:
+            Example result is {(l, o, w): 5, _(l, o, w, e, st): 2, (w, i, d, e, st): 3, (n, e, w, e, st): 6}
+    """
+
+    def _new_pretoken_from_old_given_pair(old_pretoken: tuple[bytes], pair: tuple[bytes, bytes]) -> tuple[bytes]:
+        # form a new pretoken from old one, for example inputs
+        # old_token = (l, o, w, e, s, t), pair = (s, t)
+        # new_token = (l, o, w, e, st)
+        first_bytes, second_bytes = pair
+        merged_bytes = first_bytes + second_bytes
+
+        idx, new_pretoken = 0, []
+        while idx < len(old_pretoken):
+            if idx + 1 < len(old_pretoken) and old_pretoken[idx] == first_bytes and old_pretoken[
+                idx + 1] == second_bytes:
+                new_pretoken.append(merged_bytes)
+                idx += 2
+            else:
+                new_pretoken.append(old_pretoken[idx])
+                idx += 1
+        new_pretoken = tuple(new_pretoken)
+        return new_pretoken
+
+    def _all_pairs_from_pretoken(pretoken: tuple[bytes]) -> set[tuple[bytes, bytes]]:
+        # returns all pairs inside a pretoken, for example
+        # pretoken = (l, o, w, e, st)
+        # returns [(l, o), (o, w), (w, e), (e, st)]
+        all_pairs = set()
+        for i in range(len(pretoken) - 1):
+            all_pairs.add((pretoken[i], pretoken[i + 1]))
+
+        return all_pairs
+
+    def _pair_occurrence_in_pretoken(pair: tuple[bytes, bytes], pretoken: tuple[bytes]) -> int:
+        first, second = pair
+        count = 0
+        for i in range(len(pretoken) - 1):
+            if pretoken[i] == first and pretoken[i + 1] == second:
+                count += 1
+
+        return count
+
+    affected_tokens = pair_to_affected_tokens[pair].copy()
+    new_pretoken_to_count: dict[tuple[bytes], int] = defaultdict(int)
+
+    for old_pretoken in affected_tokens:
+        if old_pretoken not in pretoken_to_count:
+            raise Exception(f"old pretoken {old_pretoken} not presented in pretoken_to_count {pretoken_to_count}")
+
+        count = pretoken_to_count[old_pretoken]
+        new_pretoken = _new_pretoken_from_old_given_pair(old_pretoken, pair)
+
+        pairs_from_old_pretoken = _all_pairs_from_pretoken(old_pretoken)
+        pairs_from_new_pretoken = _all_pairs_from_pretoken(new_pretoken)
+
+        # incrementally updates the pair-to-count map: remove old pairs
+        for old_pair in pairs_from_old_pretoken:
+            occurrence = _pair_occurrence_in_pretoken(old_pair, old_pretoken)
+            merge_to_count[old_pair] -= count * occurrence
+            if merge_to_count[old_pair] <= 0:
+                del merge_to_count[old_pair]
+
+            if old_pretoken in pair_to_affected_tokens[old_pair]:
+                pair_to_affected_tokens[old_pair].remove(old_pretoken)
+
+        # incrementally updates the pair-to-count map: add new pairs
+        for new_pair in pairs_from_new_pretoken:
+            occurrence = _pair_occurrence_in_pretoken(new_pair, new_pretoken)
+            merge_to_count[new_pair] += count * occurrence
+            pair_to_affected_tokens[new_pair].add(new_pretoken)
+
+        new_pretoken_to_count[new_pretoken] += count  # copy new affected pre tokens
+
+    for pretoken, count in pretoken_to_count.items():  # copy unaffected pre tokens
+        if pretoken not in affected_tokens:
+            new_pretoken_to_count[pretoken] = count
+
+    return new_pretoken_to_count
 
 
 def merge_pretoken_to_count(pretoken_to_count: dict[tuple[bytes], int], pair: tuple[bytes, bytes]):
@@ -61,7 +164,7 @@ def merge_pretoken_to_count(pretoken_to_count: dict[tuple[bytes], int], pair: tu
             Pair of bytes (A and B) to be merged. An example is (s, t)
     Returns:
         Returns a new version of pretoken_to_count:
-            Example result is {(l, o, w): 5, (l, o, w, e, st): 2, (w, i, d, e, st): 3, (n, e, w, e, st): 6}
+            Example result is {(l, o, w): 5, _(l, o, w, e, st): 2, (w, i, d, e, st): 3, (n, e, w, e, st): 6}
     """
 
     first_bytes, second_bytes = pair
