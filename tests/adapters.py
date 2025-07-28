@@ -3,7 +3,6 @@ from __future__ import annotations
 import os
 from collections import defaultdict
 
-import regex as re
 from typing import IO, Any, BinaryIO
 from collections.abc import Iterable
 from jaxtyping import Float, Int
@@ -12,6 +11,8 @@ import numpy.typing as npt
 import torch
 from torch import Tensor
 import logging
+
+from cs336_basics.tokenizer import pre_tokenize_count_in_boundary, Tokenizer
 
 
 def run_linear(
@@ -562,29 +563,7 @@ def get_tokenizer(
     Returns:
         A BPE tokenizer that uses the provided vocab, merges, and special tokens.
     """
-    raise NotImplementedError
-
-
-def _pre_tokenize_boundary(input_path, start, end, special_tokens, pretokenization_pat) -> dict[tuple[bytes], int]:
-    result: dict[tuple[bytes], int] = defaultdict(int)
-    from tqdm import tqdm
-    with open(input_path, "rb") as f:
-        f.seek(start)
-        chunk = f.read(end - start).decode("utf-8", errors="ignore")
-
-        # split the chunk according to the special token
-        pattern = "|".join(re.escape(token) for token in special_tokens)
-        documents = re.split(pattern, chunk)
-
-        for document in tqdm(documents, desc=f"pre_tokenization: start={start}, end={end}"):
-            # perform pre tokenization
-            for match in re.finditer(pretokenization_pat, document):
-                pretoken = match.group()
-                pretoken_bytes = pretoken.encode('utf-8')
-                pretoken_bytes_tuple = tuple(bytes([byte]) for byte in pretoken_bytes)
-                result[pretoken_bytes_tuple] += 1
-
-        return result
+    return Tokenizer(vocab, merges, special_tokens)
 
 
 def run_train_bpe(
@@ -637,14 +616,13 @@ def run_train_bpe(
     logging.info(f"running pre tokenization")
 
     pretoken_to_count: dict[tuple[bytes], int] = defaultdict(int)
-    pretokenization_pat = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
 
     with mp.Pool(processes=multiprocess_num) as pool:
         async_results = []
         for start, end in zip(boundaries[:-1], boundaries[1:]):
             # run pre-tokenization tasks in parallel
-            async_result = pool.apply_async(_pre_tokenize_boundary,
-                                            args=(input_path, start, end, special_tokens, pretokenization_pat))
+            async_result = pool.apply_async(pre_tokenize_count_in_boundary,
+                                            args=(input_path, start, end, special_tokens))
             async_results.append(async_result)
 
         for async_result in async_results:
