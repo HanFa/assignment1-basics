@@ -45,5 +45,21 @@ Problem `train_bpe_expts_owt`:
 2. The tokenizer trained using OWT has more longer merges, sometimes even an complete word due to larger vocabulary
    size.
 
+Problem `tokenizer_experiments`:
 
+1. Test code available at [./tests/custom/test_tokenizer_experiments.py](./tests/custom/test_tokenizer_experiments.py).
+   They have similar compress ratio around 4 bytes / token.
 
+```text
+10K tokenizer:
+[tiny stories] text length: 7123, bytes length: 7123, encoded ids num: 1759, compress rate: 4.049459920409324 bytes/token, tput: 1035169.5156785974 bytes/sec
+[owt] text length: 68358, bytes length: 69812, encoded ids num: 21397, compress rate: 3.2627003785577418 bytes/token, tput: 812894.5638599705 bytes/sec
+
+32K tokenizer:
+[tiny stories] text length: 7123, bytes length: 7123, encoded ids num: 1804, compress rate: 3.9484478935698446 bytes/token, tput: 938966.2264127224 bytes/sec
+[owt] text length: 68358, bytes length: 69812, encoded ids num: 15811, compress rate: 4.415406995129973 bytes/token, tput: 974849.9364044652 bytes/sec
+```
+
+2. If you ran 10k tokenizer on OWT, it will have lower compress ratio than the 32k tokenizer.
+3. Throughput is around `1 MB/sec`. For 825GB, it will take around 9.7 days.
+4. Token IDs are within the range of `uint16` (0 to 65535 inclusive) given the 32k vocab size.
