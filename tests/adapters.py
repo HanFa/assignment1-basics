@@ -13,6 +13,7 @@ from torch import Tensor
 import logging
 
 from cs336_basics.tokenizer import pre_tokenize_count_in_boundary, Tokenizer
+from cs336_basics.modules import Linear, Embedding, RMSNorm, SwiGLUFeedForward
 
 
 def run_linear(
@@ -34,7 +35,14 @@ def run_linear(
         Float[Tensor, "... d_out"]: The transformed output of your linear module.
     """
 
-    raise NotImplementedError
+    linear = Linear(d_in, d_out)
+
+    state_dict = linear.state_dict()
+    state_dict['weights'] = weights
+    linear.load_state_dict(state_dict)
+
+    out_features = linear(in_features)
+    return out_features
 
 
 def run_embedding(
@@ -56,7 +64,14 @@ def run_embedding(
         Float[Tensor, "... d_model"]: Batch of embeddings returned by your Embedding layer.
     """
 
-    raise NotImplementedError
+    embedding = Embedding(num_embeddings=vocab_size, embedding_dim=d_model)
+
+    state_dict = embedding.state_dict()
+    state_dict['indexing'] = weights
+    embedding.load_state_dict(state_dict)
+
+    embedded_token_ids = embedding(token_ids)
+    return embedded_token_ids
 
 
 def run_swiglu(
@@ -81,14 +96,16 @@ def run_swiglu(
     Returns:
         Float[Tensor, "... d_model"]: Output embeddings of the same shape as the input embeddings.
     """
-    # Example:
-    # If your state dict keys match, you can use `load_state_dict()`
-    # swiglu.load_state_dict(weights)
-    # You can also manually assign the weights
-    # swiglu.w1.weight.data = w1_weight
-    # swiglu.w2.weight.data = w2_weight
-    # swiglu.w3.weight.data = w3_weight
-    raise NotImplementedError
+
+    swiglu_ffn = SwiGLUFeedForward(d_model, d_ff)
+    state_dict = swiglu_ffn.state_dict()
+    state_dict['weight1'] = w1_weight
+    state_dict['weight2'] = w2_weight
+    state_dict['weight3'] = w3_weight
+    swiglu_ffn.load_state_dict(state_dict)
+
+    out_features = swiglu_ffn(in_features)
+    return out_features
 
 
 def run_scaled_dot_product_attention(
@@ -383,7 +400,15 @@ def run_rmsnorm(
         Float[Tensor,"... d_model"]: Tensor of with the same shape as `in_features` with the output of running
         RMSNorm of the `in_features`.
     """
-    raise NotImplementedError
+
+    rms_norm = RMSNorm(d_model, eps)
+
+    state_dict = rms_norm.state_dict()
+    state_dict['weights'] = weights
+    rms_norm.load_state_dict(state_dict)
+
+    normed_features = rms_norm(in_features)
+    return normed_features
 
 
 def run_silu(in_features: Float[Tensor, " ..."]) -> Float[Tensor, " ..."]:
