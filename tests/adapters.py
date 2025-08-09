@@ -13,7 +13,7 @@ from torch import Tensor
 import logging
 
 from cs336_basics.tokenizer import pre_tokenize_count_in_boundary, Tokenizer
-from cs336_basics.modules import Linear, Embedding, RMSNorm, SwiGLUFeedForward
+from cs336_basics.modules import Linear, Embedding, RMSNorm, SwiGLUFeedForward, RotaryPositionalEmbedding
 
 
 def run_linear(
@@ -222,7 +222,9 @@ def run_rope(
     Returns:
         Float[Tensor, " ... sequence_length d_k"]: Tensor with RoPEd input.
     """
-    raise NotImplementedError
+    rope = RotaryPositionalEmbedding(theta, d_k, max_seq_len)
+    rotated = rope(in_query_or_key, token_positions)
+    return rotated
 
 
 def run_transformer_block(

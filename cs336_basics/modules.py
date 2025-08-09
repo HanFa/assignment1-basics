@@ -127,3 +127,47 @@ class SwiGLUFeedForward(nn.Module):
         swiglu = einsum(self.weight2, dot_product, "d_model d_ff, ... d_ff -> ... d_model")
 
         return swiglu
+
+
+class RotaryPositionalEmbedding(nn.Module):
+
+    def __init__(self, theta: float, d_k: int, max_seq_len: int, device=None):
+        """
+
+        Args:
+            theta: the theta value for RoPE
+            d_k: dimension of query and key vectors
+            max_seq_len: max sequence length that will be inputted
+            device: device to store the buffer on
+        """
+        super().__init__()
+
+        self.theta = theta
+        self.max_seq_len = max_seq_len
+        self.d_k = d_k
+
+        r = torch.zeros((max_seq_len, d_k, d_k))
+
+        for index in range(max_seq_len):
+            for k in range(d_k // 2):
+                angle = float(index) / theta ** (2 * k / d_k)
+                r[index, 2 * k: 2 * k + 2, 2 * k: 2 * k + 2] = torch.Tensor([
+                    [np.cos(angle), -np.sin(angle)],
+                    [np.sin(angle), np.cos(angle)]
+                ])
+
+        assert r.shape == (max_seq_len, d_k, d_k)
+
+        self.register_buffer('r', r, persistent=False)
+
+    def forward(self, x: torch.Tensor, token_positions: torch.Tensor) -> torch.Tensor:
+
+        # slice from the r buffer
+        rotary = self.r[token_positions, :, :]
+
+        assert rotary.shape == (len(token_positions), self.d_k, self.d_k)
+
+        rotated_x = einsum(rotary, x, "seq_len d_out d_in, ... seq_len d_in -> ... seq_len d_out")
+        assert rotated_x.shape == x.shape
+
+        return rotated_x
