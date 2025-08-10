@@ -63,3 +63,42 @@ Problem `tokenizer_experiments`:
 2. If you ran 10k tokenizer on OWT, it will have lower compress ratio than the 32k tokenizer.
 3. Throughput is around `1 MB/sec`. For 825GB, it will take around 9.7 days.
 4. Token IDs are within the range of `uint16` (0 to 65535 inclusive) given the 32k vocab size.
+
+Problem `transformer_accounting`:
+
+1. For every layer,
+
+| Layer                                   | Params num    |
+|-----------------------------------------|---------------|
+| token_embedding.indexing                | 50257 *  1600 |
+| transformer_blocks.{i}.block.0.weights  | 1600          |
+| transformer_blocks.{i}.block.1.q_proj   | 1600 * 1600   |
+| transformer_blocks.{i}.block.1.k_proj   | 1600 * 1600   |
+| transformer_blocks.{i}.block.1.v_proj   | 1600 * 1600   |
+| transformer_blocks.{i}.block.1.o_proj   | 1600 * 1600   |
+| transformer_blocks.{i}.block2.0.weights | 1600          |
+| transformer_blocks.{i}.block2.1.weight1 | 6400 * 1600   |
+| transformer_blocks.{i}.block2.1.weight2 | 6400 * 1600   |
+| transformer_blocks.{i}.block2.1.weight3 | 6400 * 1600   |
+| norm.weights                            | 1600          |
+| output_embedding.weights                | 50257 *  1600 |
+
+Total parameter num is 2127057600, which translate to 2.12GBi assuming single precision.
+
+2. For every layer,
+
+| Layer                      | FLOPs                                                    |
+|----------------------------|----------------------------------------------------------|
+| token_embedding.indexing   | 2 * 1024 * 50257 * 1600                                  |
+| transformer_blocks.{i}.ln  | no matmul                                                |
+| transformer_blocks.{i}.mha | 3 * 1024 * 1600 * 1600 + 25 * (2 * 1024 * 1024 * 64 * 2) |
+| transformer_blocks.{i}.ffn | 2 * 1024 * 1600 * 6400 * 3                               |
+| output_embedding.weights   | 2 * 1024 * 50257 * 1600                                  |
+
+Total FLOPs from matrix multiplications is around 4048873062400 aka 4TFLOPs.
+
+3. FFN requires most FLOPs.
+4. Both FFN and attention block takes increasing portion of FLOPs as model's hidden dimension scales, especially the
+   MHA.
+5. The total FLOPs will increase actually more than 16 times. MHA will take a larger portion of FLOPs since it scales
+   quadratically as the max sequence length.

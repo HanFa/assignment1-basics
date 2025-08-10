@@ -14,7 +14,7 @@ import logging
 
 from cs336_basics.tokenizer import pre_tokenize_count_in_boundary, Tokenizer
 from cs336_basics.modules import Linear, Embedding, RMSNorm, SwiGLUFeedForward, RotaryPositionalEmbedding, Softmax, \
-    ScaledDotProdAttention, MultiHeadSelfAttention
+    ScaledDotProdAttention, MultiHeadSelfAttention, TransformerBlock, TransformerLM
 
 
 def run_linear(
@@ -325,7 +325,27 @@ def run_transformer_block(
         Float[Tensor, "batch sequence_length d_model"] Tensor with the output of
         running the Transformer block on the input features while using RoPE.
     """
-    raise NotImplementedError
+    transformer_block = TransformerBlock(d_model, num_heads, d_ff, theta, max_seq_len)
+
+    state_dict = transformer_block.state_dict()
+
+    state_dict["block.0.weights"] = weights["ln1.weight"]
+
+    state_dict["block.1.q_proj"] = weights["attn.q_proj.weight"]
+    state_dict["block.1.k_proj"] = weights["attn.k_proj.weight"]
+    state_dict["block.1.v_proj"] = weights["attn.v_proj.weight"]
+    state_dict["block.1.o_proj"] = weights["attn.output_proj.weight"]
+
+    state_dict["block2.0.weights"] = weights["ln2.weight"]
+
+    state_dict["block2.1.weight1"] = weights["ffn.w1.weight"]
+    state_dict["block2.1.weight2"] = weights["ffn.w2.weight"]
+    state_dict["block2.1.weight3"] = weights["ffn.w3.weight"]
+
+    transformer_block.load_state_dict(state_dict)
+
+    out_features = transformer_block(in_features)
+    return out_features
 
 
 def run_transformer_lm(
@@ -407,7 +427,31 @@ def run_transformer_lm(
         Float[Tensor, "batch_size sequence_length vocab_size"]: Tensor with the predicted unnormalized
         next-word distribution for each token.
     """
-    raise NotImplementedError
+    transformer_lm = TransformerLM(d_model, num_heads, d_ff, rope_theta, context_length, vocab_size, num_layers)
+
+    state_dict = transformer_lm.state_dict()
+    state_dict["token_embedding.indexing"] = weights["token_embeddings.weight"]
+
+    for i in range(num_layers):
+        state_dict[f"transformer_blocks.{i}.block.0.weights"] = weights[f"layers.{i}.ln1.weight"]
+
+        state_dict[f"transformer_blocks.{i}.block.1.q_proj"] = weights[f"layers.{i}.attn.q_proj.weight"]
+        state_dict[f"transformer_blocks.{i}.block.1.k_proj"] = weights[f"layers.{i}.attn.k_proj.weight"]
+        state_dict[f"transformer_blocks.{i}.block.1.v_proj"] = weights[f"layers.{i}.attn.v_proj.weight"]
+        state_dict[f"transformer_blocks.{i}.block.1.o_proj"] = weights[f"layers.{i}.attn.output_proj.weight"]
+
+        state_dict[f"transformer_blocks.{i}.block2.0.weights"] = weights[f"layers.{i}.ln2.weight"]
+        state_dict[f"transformer_blocks.{i}.block2.1.weight1"] = weights[f"layers.{i}.ffn.w1.weight"]
+        state_dict[f"transformer_blocks.{i}.block2.1.weight2"] = weights[f"layers.{i}.ffn.w2.weight"]
+        state_dict[f"transformer_blocks.{i}.block2.1.weight3"] = weights[f"layers.{i}.ffn.w3.weight"]
+
+    state_dict["norm.weights"] = weights["ln_final.weight"]
+    state_dict["output_embedding.weights"] = weights["lm_head.weight"]
+
+    transformer_lm.load_state_dict(state_dict)
+
+    out_indices = transformer_lm(in_indices)
+    return out_indices
 
 
 def run_rmsnorm(
