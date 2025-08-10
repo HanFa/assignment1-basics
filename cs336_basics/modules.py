@@ -160,13 +160,20 @@ class RotaryPositionalEmbedding(nn.Module):
 
         self.register_buffer('r', r, persistent=False)
 
-    def forward(self, x: torch.Tensor, token_positions: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, token_positions: torch.Tensor | None = None) -> torch.Tensor:
+
+        seq_len = x.shape[-2]
 
         # slice from the r buffer
-        token_positions = token_positions.flatten()
+        if token_positions is not None:
+            token_positions = token_positions.flatten()
+        else:
+            token_positions = torch.arange(seq_len)  # default to use arange if not specified
+
         rotary = self.r[token_positions, :, :]
 
         assert rotary.shape == (len(token_positions), self.d_k, self.d_k)
+        assert len(token_positions) == seq_len
 
         rotated_x = einsum(rotary, x, "seq_len d_out d_in, ... seq_len d_in -> ... seq_len d_out")
         assert rotated_x.shape == x.shape
@@ -262,7 +269,6 @@ class MultiHeadSelfAttention(nn.Module):
                                                                                           i * d_k: (i + 1) * d_k]
 
             if self.apply_rope:
-                assert token_positions is not None
                 q = self.rope(q, token_positions)
                 k = self.rope(k, token_positions)
 
@@ -280,3 +286,55 @@ class MultiHeadSelfAttention(nn.Module):
 
         mult_attn_out = einsum(self.o_proj, attn_out, "d_model d_k, batch_size ... d_k -> batch_size ... d_model")
         return mult_attn_out
+
+
+class TransformerBlock(nn.Module):
+
+    def __init__(self, d_model: int, num_heads: int, d_ff: int, theta: float, max_seq_len: int):
+        super().__init__()
+
+        self.d_model = d_model
+        self.num_heads = num_heads
+        self.d_ff = d_ff
+
+        self.block = nn.Sequential(
+            RMSNorm(d_model),
+            MultiHeadSelfAttention(d_model, num_heads, theta, max_seq_len, apply_rope=True)
+        )
+
+        self.block2 = nn.Sequential(
+            RMSNorm(d_model),
+            SwiGLUFeedForward(d_model, d_ff)
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        pre_shape = x.shape
+        x += self.block(x)
+        x += self.block2(x)
+
+        assert x.shape == pre_shape
+        return x
+
+
+class TransformerLM(nn.Module):
+
+    def __init__(self, d_model: int, num_heads: int, d_ff: int, theta: float, max_seq_len: int, vocab_size: int,
+                 num_layers: int):
+        super().__init__()
+
+        self.token_embedding = Embedding(vocab_size, d_model)
+
+        self.transformer_blocks = nn.Sequential(*[
+            TransformerBlock(d_model, num_heads, d_ff, theta, max_seq_len)
+            for _ in range(num_layers)
+        ])
+
+        self.norm = RMSNorm(d_model)
+        self.output_embedding = Linear(d_model, vocab_size)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.token_embedding(x)
+        x = self.transformer_blocks(x)
+        x = self.norm(x)
+        x = self.output_embedding(x)
+        return x
