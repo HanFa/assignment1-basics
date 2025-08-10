@@ -13,7 +13,8 @@ from torch import Tensor
 import logging
 
 from cs336_basics.tokenizer import pre_tokenize_count_in_boundary, Tokenizer
-from cs336_basics.modules import Linear, Embedding, RMSNorm, SwiGLUFeedForward, RotaryPositionalEmbedding
+from cs336_basics.modules import Linear, Embedding, RMSNorm, SwiGLUFeedForward, RotaryPositionalEmbedding, Softmax, \
+    ScaledDotProdAttention, MultiHeadSelfAttention
 
 
 def run_linear(
@@ -126,7 +127,11 @@ def run_scaled_dot_product_attention(
     Returns:
         Float[Tensor, " ... queries d_v"]: Output of SDPA
     """
-    raise NotImplementedError
+
+    attn_block = ScaledDotProdAttention()
+    attn = attn_block(Q, K, V, mask)
+
+    return attn
 
 
 def run_multihead_self_attention(
@@ -160,7 +165,19 @@ def run_multihead_self_attention(
         Float[Tensor, " ... sequence_length d_out"]: Tensor with the output of running your optimized, batched multi-headed attention
         implementation with the given QKV projection weights and input features.
     """
-    raise NotImplementedError
+
+    attn_block = MultiHeadSelfAttention(d_model, num_heads)
+
+    state_dict = attn_block.state_dict()
+    state_dict['q_proj'] = q_proj_weight
+    state_dict['k_proj'] = k_proj_weight
+    state_dict['v_proj'] = v_proj_weight
+    state_dict['o_proj'] = o_proj_weight
+
+    attn_block.load_state_dict(state_dict)
+
+    out_features = attn_block(in_features)
+    return out_features
 
 
 def run_multihead_self_attention_with_rope(
@@ -200,7 +217,18 @@ def run_multihead_self_attention_with_rope(
         Float[Tensor, " ... sequence_length d_out"]: Tensor with the output of running your optimized, batched multi-headed attention
         implementation with the given QKV projection weights and input features.
     """
-    raise NotImplementedError
+    attn_block = MultiHeadSelfAttention(d_model, num_heads, theta, max_seq_len, apply_rope=True)
+
+    state_dict = attn_block.state_dict()
+    state_dict['q_proj'] = q_proj_weight
+    state_dict['k_proj'] = k_proj_weight
+    state_dict['v_proj'] = v_proj_weight
+    state_dict['o_proj'] = o_proj_weight
+
+    attn_block.load_state_dict(state_dict)
+
+    out_features = attn_block(in_features, token_positions)
+    return out_features
 
 
 def run_rope(
@@ -463,7 +491,12 @@ def run_softmax(in_features: Float[Tensor, " ..."], dim: int) -> Float[Tensor, "
         Float[Tensor, "..."]: Tensor of with the same shape as `in_features` with the output of
         softmax normalizing the specified `dim`.
     """
-    raise NotImplementedError
+
+    softmax = Softmax(dim=dim)
+
+    out_features = softmax(in_features)
+
+    return out_features
 
 
 def run_cross_entropy(inputs: Float[Tensor, " batch_size vocab_size"], targets: Int[Tensor, " batch_size"]) -> Float[

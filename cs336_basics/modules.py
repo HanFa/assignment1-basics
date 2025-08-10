@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import numpy as np
-from einops import einsum
+from einops import einsum, reduce, rearrange
 
 
 class Linear(nn.Module):
@@ -163,6 +163,7 @@ class RotaryPositionalEmbedding(nn.Module):
     def forward(self, x: torch.Tensor, token_positions: torch.Tensor) -> torch.Tensor:
 
         # slice from the r buffer
+        token_positions = token_positions.flatten()
         rotary = self.r[token_positions, :, :]
 
         assert rotary.shape == (len(token_positions), self.d_k, self.d_k)
@@ -171,3 +172,111 @@ class RotaryPositionalEmbedding(nn.Module):
         assert rotated_x.shape == x.shape
 
         return rotated_x
+
+
+class Softmax(nn.Module):
+
+    def __init__(self, dim: int):
+        """
+        Implement softmax layer
+        """
+        super().__init__()
+
+        self.dim = dim
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        max_x = torch.max(x, dim=self.dim, keepdim=True)  # prevent nan
+
+        x = x - max_x.values
+        ex = torch.exp(x)
+
+        sum_ex = torch.sum(ex, dim=self.dim, keepdim=True)
+
+        result = ex / sum_ex
+
+        assert result.shape == x.shape
+
+        return result
+
+
+class ScaledDotProdAttention(nn.Module):
+
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, query: torch.Tensor, key: torch.Tensor, value: torch.Tensor,
+                mask: torch.Tensor | None) -> torch.Tensor:
+        d_k, n_len, m_len = query.shape[-1], query.shape[-2], key.shape[-2]
+
+        qk = einsum(query, key, "batch_size ... n_len d_k, batch_size ... m_len d_k -> batch_size ... m_len n_len")
+        qk = rearrange(qk, "batch_size ... m_len n_len ->  batch_size ...  n_len m_len")
+
+        if mask is None:
+            mask = torch.tril(torch.full_like(qk, True, dtype=torch.bool))
+
+        qk += torch.where(mask, 0.0, float('-inf'))
+        assert qk.shape == mask.shape
+
+        softmax = Softmax(dim=-1)
+
+        s = softmax(qk / np.sqrt(d_k))
+
+        attn = einsum(s, value, "batch_size ...  n_len m_len, batch_size ... m_len d_v -> batch_size ... n_len d_v")
+
+        return attn
+
+
+class MultiHeadSelfAttention(nn.Module):
+
+    def __init__(self, d_model: int, num_heads: int, theta: float = 0, max_seq_len: int = 0, apply_rope: bool = False):
+        super().__init__()
+
+        self.d_model = d_model
+        self.num_heads = num_heads
+        self.d_k = d_model
+
+        self.apply_rope = apply_rope
+        if apply_rope:
+            self.theta = theta
+            self.max_seq_len = max_seq_len
+            self.rope = RotaryPositionalEmbedding(theta, self.d_k // num_heads, self.max_seq_len)
+
+        self.q_proj = nn.Parameter(torch.zeros((self.d_k, self.d_model)))
+        self.k_proj = nn.Parameter(torch.zeros((self.d_k, self.d_model)))
+        self.v_proj = nn.Parameter(torch.zeros((self.d_k, self.d_model)))
+        self.o_proj = nn.Parameter(torch.zeros((self.d_model, self.d_k)))
+
+        self.attn_blocks = [ScaledDotProdAttention() for _ in range(num_heads)]
+
+    def forward(self, x: torch.Tensor, token_positions: torch.Tensor | None = None) -> torch.Tensor:
+        wqx = einsum(self.q_proj, x, "d_k d_model, batch_size ... d_model -> batch_size ... d_k")
+        wkx = einsum(self.k_proj, x, "d_k d_model, batch_size ... d_model -> batch_size ... d_k")
+        wvx = einsum(self.v_proj, x, "d_k d_model, batch_size ... d_model -> batch_size ... d_k")
+
+        attn_out = []
+
+        d_k = self.d_k // self.num_heads
+
+        for i in range(self.num_heads):
+            q, k, v = wqx[..., i * d_k: (i + 1) * d_k], wkx[..., i * d_k: (i + 1) * d_k], wvx[...,
+                                                                                          i * d_k: (i + 1) * d_k]
+
+            if self.apply_rope:
+                assert token_positions is not None
+                q = self.rope(q, token_positions)
+                k = self.rope(k, token_positions)
+
+            attn_out.append(
+                self.attn_blocks[i](
+                    query=q,
+                    key=k,
+                    value=v,
+                    mask=None
+                )
+            )
+
+        attn_out = torch.concat(attn_out, dim=-1)
+        assert attn_out.shape[-1] == self.d_k
+
+        mult_attn_out = einsum(self.o_proj, attn_out, "d_model d_k, batch_size ... d_k -> batch_size ... d_model")
+        return mult_attn_out
