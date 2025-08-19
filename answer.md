@@ -102,3 +102,55 @@ Total FLOPs from matrix multiplications is around 4048873062400 aka 4TFLOPs.
    MHA.
 5. The total FLOPs will increase actually more than 16 times. MHA will take a larger portion of FLOPs since it scales
    quadratically as the max sequence length.
+
+Problem `learning_rate_tuning`:
+
+See test `TestOptimizer.test_simple_training_with_sgd_optimizer`. The loss decays faster with larger learning rate. It
+doesn't diverge because of the decay factor over time.
+
+Problem `adamwAccounting`:
+
+(a) RMSNorm takes `d_model` parameters. MHA takes `4 * d_model * d_model` parameters.
+Point-wise FFN takes `d_model * d_ff + d_ff + d_ff * d_model + d_model`. Output RMSNorm takes `d_model`.
+Output embedding takes `d_model * vocab_size`. Hence, the total memory AdamW takes is
+
+```text
+# - First moment (momentum): 1 copy per parameter
+# - Second moment (variance): 1 copy per parameter  
+# - Parameters copy for updates: 1 copy per parameter (in fp32)
+optimizer_state = 4 bytes * 3 * ( num_layers * (4 * d_model * d_model + d_model * d_ff + d_ff + d_ff * d_model + d_model) + d_model + d_model * vocab_size )
+```
+
+(b) `batch_size` contributes to the activation memory.
+
+```text
+activation_memory = 4 bytes * (batch_size * sequence_length * d_model * num_layers)
+```
+
+Hence we need `optimizer_state + activation_memory < 80GB`.
+
+(c) AdamW requires 16 FLOPs to update one parameter in a step.
+
+```text
+AdamW algorithm per parameter:
+1. g_t = ∇f(θ_{t-1})                    # Gradient (computed in backward pass)
+2. m_t = β₁ * m_{t-1} + (1-β₁) * g_t    # First moment update (3 FLOPs)
+3. v_t = β₂ * v_{t-1} + (1-β₂) * g_t²   # Second moment update (4 FLOPs)
+4. m̂_t = m_t / (1 - β₁ᵗ)               # Bias correction (2 FLOPs)
+5. v̂_t = v_t / (1 - β₂ᵗ)               # Bias correction (2 FLOPs)
+6. θ_t = θ_{t-1} - α * (m̂_t / (√v̂_t + ε) + λ * θ_{t-1})  # Parameter update (5-6 FLOPs)
+```
+
+Hence,
+
+```text
+flops_per_step = 16 * optimizer_state
+```
+
+(d) Training GPT-2 XL for 400K steps would take approximately 13 days on a single A100 GPU.
+GPT-2 XL with 1.5B parameters. Assuming `tokens_per_step = batch_size * seq_len=1024`. Observed tput is 9.8 TFLOP/s (50%
+MFU as given).
+Forward pass: 9.2 TFLOPs per step (6N rule: 6 × 1.5B × 1,024 tokens). Total per step: 27.6 TFLOPs (including 2× backward
+pass overhead).
+Hence time per step is 2.84 sec and tototal time is 13.1 days.
+

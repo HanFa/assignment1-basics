@@ -336,5 +336,24 @@ class TransformerLM(nn.Module):
         x = self.token_embedding(x)
         x = self.transformer_blocks(x)
         x = self.norm(x)
-        x = self.output_embedding(x)
+        x = self.output_embedding(x)  # returns un-normalized output logits
         return x
+
+
+def cross_entropy_loss(logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+    vocab_size = logits.shape[-1]
+    logits = logits.view(-1, vocab_size)
+    targets = targets.view(-1)
+
+    # Compute softmax probabilities
+    max_logit = torch.max(logits, dim=1, keepdim=True)[0]
+    logits_stable = logits - max_logit
+
+    log_sum_exp = torch.logsumexp(logits_stable, dim=-1, keepdim=True)
+
+    # Take log and gather target probabilities
+    log_probs = logits_stable - log_sum_exp
+    target_log_probs = log_probs.gather(1, targets.unsqueeze(1)).squeeze(1)
+
+    # Return negative mean log likelihood
+    return -target_log_probs.mean()
