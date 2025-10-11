@@ -14,7 +14,8 @@ import logging
 
 from cs336_basics.tokenizer import pre_tokenize_count_in_boundary, Tokenizer
 from cs336_basics.modules import Linear, Embedding, RMSNorm, SwiGLUFeedForward, RotaryPositionalEmbedding, Softmax, \
-    ScaledDotProdAttention, MultiHeadSelfAttention, TransformerBlock, TransformerLM, cross_entropy_loss
+    ScaledDotProdAttention, MultiHeadSelfAttention, TransformerBlock, TransformerLM, cross_entropy_loss, \
+    gradient_clipping
 
 
 def run_linear(
@@ -570,7 +571,7 @@ def run_gradient_clipping(parameters: Iterable[torch.nn.Parameter], max_l2_norm:
 
     The gradients of the parameters (parameter.grad) should be modified in-place.
     """
-    raise NotImplementedError
+    return gradient_clipping(parameters, max_l2_norm)
 
 
 def get_adamw_cls() -> type[torch.optim.Optimizer]:
