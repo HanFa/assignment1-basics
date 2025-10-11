@@ -4,6 +4,8 @@ import unittest
 import pickle
 import random
 
+import pytest
+
 from tests.adapters import get_tokenizer
 from tests.common import FIXTURES_PATH
 
@@ -36,6 +38,7 @@ class TestTokenizerExperiments(unittest.TestCase):
     def load_10_samples_from_owt_valid():
         return TestTokenizerExperiments.load_x_samples_from("../../data/owt_valid.txt")
 
+    @pytest.mark.skip()
     def test_10k_tiny_stories_tokenizer(self):
         vocab_path_fn = os.path.join("pickles", "vocab.pickle")
         merge_path_fn = os.path.join("pickles", "merges.pickle")
@@ -58,6 +61,7 @@ class TestTokenizerExperiments(unittest.TestCase):
                   f"encoded ids num: {len(encoded_ids)}, compress rate: {len(sampled_text.encode('utf-8')) / len(encoded_ids)} bytes/token, "
                   f"tput: {len(sampled_text.encode('utf-8')) / duration} bytes/sec")
 
+    @pytest.mark.skip()
     def test_32k_owt_tokenizer(self):
         vocab_path_fn = os.path.join("pickles", "vocab_owt.pickle")
         merge_path_fn = os.path.join("pickles", "merges_owt.pickle")

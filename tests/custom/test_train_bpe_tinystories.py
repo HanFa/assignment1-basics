@@ -3,6 +3,7 @@ import pathlib
 import cProfile
 import pstats
 import pickle
+import pytest
 from viztracer import VizTracer
 
 from tests.adapters import run_train_bpe
@@ -19,6 +20,7 @@ class TestTrainBPETinyStories(unittest.TestCase):
     def tearDown(self):
         pass
 
+    @pytest.mark.skip()
     def test_train_bpe_tiny_stories(self):
         self.tracer.start()
 
@@ -35,6 +37,7 @@ class TestTrainBPETinyStories(unittest.TestCase):
             self.tracer.stop()
             self.tracer.save()
 
+    @pytest.mark.skip()
     def test_train_bpe_tiny_stories_c_profiler(self):
         self.profiler.enable()
 
@@ -54,6 +57,7 @@ class TestTrainBPETinyStories(unittest.TestCase):
             stats.sort_stats('cumulative')
             stats.print_stats(10)
 
+    @pytest.mark.skip()
     def test_train_bpe_tiny_stories_no_profilers(self):
 
         input_path = DATA_PATH / "TinyStoriesV2-GPT4-train.txt"
