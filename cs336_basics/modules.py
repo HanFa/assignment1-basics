@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import numpy as np
 from einops import einsum, reduce, rearrange
+from typing import Iterable
 
 
 class Linear(nn.Module):
@@ -357,3 +358,13 @@ def cross_entropy_loss(logits: torch.Tensor, targets: torch.Tensor) -> torch.Ten
 
     # Return negative mean log likelihood
     return -target_log_probs.mean()
+
+
+def gradient_clipping(parameters: Iterable[torch.nn.Parameter], max_l2_norm: float):
+    grads = [parameter.grad for parameter in parameters if parameter.grad is not None]
+    grad_norm = torch.linalg.vector_norm(torch.stack(grads))
+    if grad_norm > max_l2_norm:
+        for parameter in parameters:
+            if parameter.grad is not None:
+                parameter.grad *= (max_l2_norm / (grad_norm + 1e-6))
+
