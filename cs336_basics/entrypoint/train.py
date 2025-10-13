@@ -24,6 +24,7 @@ Note: Requires pre-tokenized .npy files. Use tokenize_dataset.py to prepare data
 import argparse
 import os
 import time
+import math
 from dataclasses import asdict
 import json
 import logging
@@ -33,6 +34,13 @@ import torch
 import torch.nn as nn
 import mlflow
 import mlflow.pytorch
+
+
+def to_bits(loss_nats): return loss_nats / math.log(2.0)
+
+
+def to_ppl(loss_nats): return math.exp(loss_nats)
+
 
 # Configure logging
 logging.basicConfig(
@@ -112,6 +120,16 @@ def load_data_with_memmap(file_path: str, dtype=np.uint16):
     return np.load(npy_path, mmap_mode='r')
 
 
+def load_data_with_memmap_and_assert(max_vocab_size: int, file_path: str, dtype=np.uint16):
+    data = load_data_with_memmap(file_path, dtype)
+    min_id, max_id = int(data.min()), int(data.max())
+    assert max_id < max_vocab_size, (
+        f"Token id {max_id} exceeds vocab_size {max_vocab_size}. "
+        f"Retokenize or set vocab_size to cover the data (e.g., 50257)."
+    )
+    return data
+
+
 def evaluate(model: nn.Module, eval_data: np.ndarray, cfg: TrainConfig):
     """Evaluate the model on validation data."""
     model.eval()
@@ -138,10 +156,10 @@ def main():
     cfg = parse_args()
 
     torch.manual_seed(cfg.seed)
-    torch.autograd.set_detect_anomaly(True)
     np.random.seed(cfg.seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed(cfg.seed)
+    torch.autograd.set_detect_anomaly(True)
 
     # Create checkpoint directory if it doesn't exist
     os.makedirs(cfg.checkpoint_dir, exist_ok=True)
@@ -157,11 +175,11 @@ def main():
 
     # Load data with memory mapping
     logger.info("Loading training data...")
-    train_data = load_data_with_memmap(cfg.train_path)
+    train_data = load_data_with_memmap_and_assert(cfg.vocab_size, cfg.train_path)
     logger.info(f"Training data shape: {train_data.shape}")
 
     logger.info("Loading validation data...")
-    valid_data = load_data_with_memmap(cfg.valid_path)
+    valid_data = load_data_with_memmap_and_assert(cfg.vocab_size, cfg.valid_path)
     logger.info(f"Validation data shape: {valid_data.shape}")
 
     # Initialize model
@@ -210,10 +228,11 @@ def main():
 
     try:
         for step in range(start_step, cfg.max_steps):
-            # Load batch
             inputs, targets = load_inputs_target_from_np_dataset(
                 train_data, cfg.batch_size, cfg.context_length, cfg.device
             )
+            assert torch.allclose(inputs[:, 1:], targets[:, :-1]), \
+                "Targets must be the next token (inputs shifted right by 1). Check your dataloader."
 
             # Move to device and ensure correct dtype
             inputs = inputs.to(cfg.device).long()
@@ -254,7 +273,8 @@ def main():
                 elapsed = time.time() - start_time
                 tokens_per_sec = (step + 1 - start_step) * cfg.batch_size * cfg.context_length / elapsed
 
-                logger.info(f"Step {step + 1}/{cfg.max_steps} | Loss: {avg_loss:.4f} | "
+                logger.info(f"Step {step + 1}/{cfg.max_steps} | Loss: {avg_loss:.4f} nats |"
+                            f" {to_bits(avg_loss):.4f} bits | PPL: {to_ppl(avg_loss):.2f} | "
                             f"LR: {lr:.2e} | Tokens/sec: {tokens_per_sec:.0f}")
 
                 if cfg.use_mlflow:

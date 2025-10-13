@@ -64,8 +64,8 @@ def parse_args():
 
 def load_tokenizer() -> tuple[Tokenizer, int]:
     """Load the tokenizer from vocab and merges pickle files."""
-    vocab_path = "pickles/vocab_owt.pickle"
-    merges_path = "pickles/merges_owt.pickle"
+    vocab_path = "pickles/vocab.pickle"
+    merges_path = "pickles/merges.pickle"
 
     logger.info(f"Loading tokenizer from:")
     logger.info(f"  Vocab: {vocab_path}")

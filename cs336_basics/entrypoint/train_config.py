@@ -22,7 +22,7 @@ class TrainConfig:
     d_ff: int = 3072
     rope_theta: float = 10000.0
     max_seq_len: int = 1024
-    vocab_size: int = 32000
+    vocab_size: int = 10000
     num_layers: int = 12
 
     # Optimizer configurations
@@ -53,7 +53,7 @@ class TrainConfig:
 
     # Checkpoint configurations
     checkpoint_dir: str = "checkpoints"
-    checkpoint_interval: int = 5000
+    checkpoint_interval: int = 500
     resume_from_checkpoint: Optional[str] = None
 
     # Logging configurations
@@ -70,57 +70,20 @@ class TrainConfig:
 
 
 @dataclass
-class GPT2SmallConfig(TrainConfig):
-    """Configuration similar to GPT-2 Small (124M parameters)."""
-
-    d_model: int = 768
-    num_heads: int = 12
-    d_ff: int = 3072
-    num_layers: int = 12
-    max_seq_len: int = 1024
-    batch_size: int = 32
-    context_length: int = 1024
+class SampleConfig(TrainConfig):
+    """Sample configuration from the pdf spec."""
+    d_model: int = 512
+    num_heads: int = 16
+    d_ff: int = 1344
+    num_layers: int = 4
+    max_seq_len: int = 256
+    batch_size: int = 64
+    context_length: int = 256
     lr: float = 6e-4
     max_lr: float = 6e-4
     min_lr: float = 6e-5
     warmup_iters: int = 2000
-    mlflow_experiment_name: str = "gpt2-small-124M"
-
-
-@dataclass
-class GPT2MediumConfig(TrainConfig):
-    """Configuration similar to GPT-2 Medium (350M parameters)."""
-
-    d_model: int = 1024
-    num_heads: int = 16
-    d_ff: int = 4096
-    num_layers: int = 24
-    max_seq_len: int = 1024
-    batch_size: int = 16
-    context_length: int = 1024
-    lr: float = 3e-4
-    max_lr: float = 3e-4
-    min_lr: float = 3e-5
-    warmup_iters: int = 4000
-    mlflow_experiment_name: str = "gpt2-medium-350M"
-
-
-@dataclass
-class GPT2LargeConfig(TrainConfig):
-    """Configuration similar to GPT-2 Large (774M parameters)."""
-
-    d_model: int = 1280
-    num_heads: int = 20
-    d_ff: int = 5120
-    num_layers: int = 36
-    max_seq_len: int = 1024
-    batch_size: int = 8
-    context_length: int = 1024
-    lr: float = 2.5e-4
-    max_lr: float = 2.5e-4
-    min_lr: float = 2.5e-5
-    warmup_iters: int = 6000
-    mlflow_experiment_name: str = "gpt2-large-774M"
+    mlflow_experiment_name: str = "sample-model-testing"
 
 
 @dataclass
@@ -136,19 +99,16 @@ class TinyConfig(TrainConfig):
     context_length: int = 256
     max_steps: int = 10000
     eval_interval: int = 100
-    checkpoint_interval: int = 1000
-    lr: float = 1e-3
-    max_lr: float = 1e-3
+    lr: float = 5e-3
+    max_lr: float = 5e-3
     min_lr: float = 1e-4
     warmup_iters: int = 500
     mlflow_experiment_name: str = "tiny-model-testing"
 
 
 CONFIG_REGISTRY = {
+    "sample": SampleConfig,
     "tiny": TinyConfig,
-    "gpt2-small": GPT2SmallConfig,
-    "gpt2-medium": GPT2MediumConfig,
-    "gpt2-large": GPT2LargeConfig,
 }
 
 

@@ -260,10 +260,18 @@ class MultiHeadSelfAttention(nn.Module):
             self.max_seq_len = max_seq_len
             self.rope = RotaryPositionalEmbedding(theta, self.d_k // num_heads, self.max_seq_len)
 
-        self.q_proj = nn.Parameter(torch.zeros((self.d_k, self.d_model)))
-        self.k_proj = nn.Parameter(torch.zeros((self.d_k, self.d_model)))
-        self.v_proj = nn.Parameter(torch.zeros((self.d_k, self.d_model)))
-        self.o_proj = nn.Parameter(torch.zeros((self.d_model, self.d_k)))
+        def _proj(out_dim, in_dim, dtype=None, device=None):
+            sigma = np.sqrt(2 / (in_dim + out_dim))
+            w = nn.init.trunc_normal_(
+                torch.empty(out_dim, in_dim, dtype=dtype, device=device),
+                mean=0, std=sigma, a=-3 * sigma, b=3 * sigma
+            )
+            return nn.Parameter(w)
+
+        self.q_proj = _proj(self.d_k, self.d_model, dtype=torch.float32)
+        self.k_proj = _proj(self.d_k, self.d_model, dtype=torch.float32)
+        self.v_proj = _proj(self.d_k, self.d_model, dtype=torch.float32)
+        self.o_proj = _proj(self.d_model, self.d_k, dtype=torch.float32)
 
         self.attn_blocks = [ScaledDotProdAttention() for _ in range(num_heads)]
 
@@ -281,6 +289,9 @@ class MultiHeadSelfAttention(nn.Module):
                                                                                           i * d_k: (i + 1) * d_k]
 
             if self.apply_rope:
+                if token_positions is None:
+                    token_positions = torch.arange(x.size(1), device=x.device)
+
                 q = self.rope(q, token_positions)
                 k = self.rope(k, token_positions)
 
