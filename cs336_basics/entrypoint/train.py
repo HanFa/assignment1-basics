@@ -152,78 +152,44 @@ def evaluate(model: nn.Module, eval_data: np.ndarray, cfg: TrainConfig):
     return total_loss / cfg.eval_steps
 
 
-def main():
-    cfg = parse_args()
+def train_model(model: nn.Module, optimizer, train_data: np.ndarray, valid_data: np.ndarray,
+                cfg: TrainConfig, start_step: int = 0, use_mlflow: bool = True):
+    """
+    Main training loop extracted as a reusable function.
 
-    torch.manual_seed(cfg.seed)
-    np.random.seed(cfg.seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed(cfg.seed)
-    torch.autograd.set_detect_anomaly(True)
+    Args:
+        model: The transformer model to train
+        optimizer: The optimizer to use
+        train_data: Training dataset
+        valid_data: Validation dataset
+        cfg: Training configuration
+        start_step: Starting step (for resuming training)
+        use_mlflow: Whether to log to MLflow
 
-    # Create checkpoint directory if it doesn't exist
-    os.makedirs(cfg.checkpoint_dir, exist_ok=True)
+    Returns:
+        dict: Training results including final loss, best validation loss, and training history
+    """
+    # Initialize MLflow if requested
+    mlflow_run_started = False
+    if use_mlflow and cfg.use_mlflow:
+        try:
+            mlflow.set_tracking_uri(cfg.mlflow_tracking_uri)
+            mlflow.set_experiment(cfg.mlflow_experiment_name)
+            mlflow.start_run(run_name=cfg.mlflow_run_name)
+            mlflow_run_started = True
 
-    # Initialize MLflow if requested and log parameters
-    if cfg.use_mlflow:
-        mlflow.set_tracking_uri(cfg.mlflow_tracking_uri)
-        mlflow.set_experiment(cfg.mlflow_experiment_name)
-        mlflow.start_run(run_name=cfg.mlflow_run_name)
-        for key, value in asdict(cfg).items():
-            if isinstance(value, (int, float, str, bool)):
-                mlflow.log_param(key, value)
-
-    # Load data with memory mapping
-    logger.info("Loading training data...")
-    train_data = load_data_with_memmap_and_assert(cfg.vocab_size, cfg.train_path)
-    logger.info(f"Training data shape: {train_data.shape}")
-
-    logger.info("Loading validation data...")
-    valid_data = load_data_with_memmap_and_assert(cfg.vocab_size, cfg.valid_path)
-    logger.info(f"Validation data shape: {valid_data.shape}")
-
-    # Initialize model
-    logger.info(f"Initializing model with {cfg.num_layers} layers...")
-    model = TransformerLM(
-        d_model=cfg.d_model,
-        num_heads=cfg.num_heads,
-        d_ff=cfg.d_ff,
-        theta=cfg.rope_theta,
-        max_seq_len=cfg.max_seq_len,
-        vocab_size=cfg.vocab_size,
-        num_layers=cfg.num_layers
-    ).to(cfg.device)
-
-    # Count parameters
-    total_params = sum(p.numel() for p in model.parameters())
-    logger.info(f"Total parameters: {total_params:,}")
-
-    # Initialize optimizer
-    if cfg.optimizer_type == "adamw":
-        optimizer = AdamW(
-            model.parameters(),
-            lr=cfg.lr,
-            weight_decay=cfg.weight_decay,
-            betas=cfg.betas,
-            eps=cfg.eps
-        )
-    else:  # sgd
-        optimizer = SGD(model.parameters(), lr=cfg.lr)
-
-    # Resume from checkpoint if specified
-    start_step = 0
-    if cfg.resume_from_checkpoint:
-        logger.info(f"Resuming from checkpoint: {cfg.resume_from_checkpoint}")
-        start_step = load_checkpoint(cfg.resume_from_checkpoint, model, optimizer)
-        logger.info(f"Resumed from step {start_step}")
-
-    # Training loop
-    logger.info(f"Starting training on {cfg.device}...")
-    logger.info(f"Batch size: {cfg.batch_size}, Context length: {cfg.context_length}")
-    logger.info(f"Max steps: {cfg.max_steps}")
+            # Log parameters
+            for key, value in asdict(cfg).items():
+                if isinstance(value, (int, float, str, bool)):
+                    mlflow.log_param(key, value)
+        except Exception as e:
+            logger.warning(f"Failed to initialize MLflow: {e}")
+            mlflow_run_started = False
 
     model.train()
     losses = []
+    val_losses = []
+    best_val_loss = float('inf')
     start_time = time.time()
 
     try:
@@ -277,7 +243,7 @@ def main():
                             f" {to_bits(avg_loss):.4f} bits | PPL: {to_ppl(avg_loss):.2f} | "
                             f"LR: {lr:.2e} | Tokens/sec: {tokens_per_sec:.0f}")
 
-                if cfg.use_mlflow:
+                if mlflow_run_started:
                     mlflow.log_metrics({
                         "train_loss": avg_loss,
                         "learning_rate": lr,
@@ -287,9 +253,15 @@ def main():
             # Evaluation
             if (step + 1) % cfg.eval_interval == 0:
                 val_loss = evaluate(model, valid_data, cfg)
+                val_losses.append(val_loss)
                 logger.info(f"Validation loss at step {step + 1}: {val_loss:.4f}")
 
-                if cfg.use_mlflow:
+                # Track the best validation loss
+                if val_loss < best_val_loss:
+                    best_val_loss = val_loss
+                    logger.info(f"New best validation loss: {best_val_loss:.4f}")
+
+                if mlflow_run_started:
                     mlflow.log_metrics({
                         "val_loss": val_loss
                     }, step=step + 1)
@@ -317,7 +289,7 @@ def main():
                 logger.info(f"Checkpoint saved successfully")
 
                 # Also log checkpoint to MLflow if enabled
-                if cfg.use_mlflow:
+                if mlflow_run_started:
                     mlflow.log_artifacts(checkpoint_path, f"checkpoints/step_{step + 1}")
 
     except Exception as e:
@@ -334,7 +306,7 @@ def main():
             f.write(f"Configuration:\n{json.dumps(asdict(cfg), indent=2)}\n")
 
         # Upload error file to MLflow if enabled
-        if cfg.use_mlflow:
+        if mlflow_run_started:
             logger.info("Uploading error.txt to MLflow...")
             mlflow.log_artifact(error_file, artifact_path="errors")
             mlflow.set_tag("training_status", "failed")
@@ -346,46 +318,129 @@ def main():
 
     # Final evaluation
     final_val_loss = evaluate(model, valid_data, cfg)
-    logger.info("Training completed!")
-    logger.info(f"Final validation loss: {final_val_loss:.4f}")
-    logger.info(f"Total time: {time.time() - start_time:.1f} seconds")
+    val_losses.append(final_val_loss)
 
-    # Save final checkpoint
-    final_checkpoint_path = os.path.join(cfg.checkpoint_dir, "final_checkpoint")
-    logger.info(f"Saving final checkpoint to {final_checkpoint_path}")
-    os.makedirs(final_checkpoint_path, exist_ok=True)
+    total_time = time.time() - start_time
 
-    torch.save(model.state_dict(), os.path.join(final_checkpoint_path, "model.pt"))
-    torch.save(optimizer.state_dict(), os.path.join(final_checkpoint_path, "optimizer.pt"))
-
-    config_dict = {
-        "iteration": cfg.max_steps,
-        "config": asdict(cfg),
-        "final_val_loss": final_val_loss
-    }
-    with open(os.path.join(final_checkpoint_path, "config.json"), 'w') as f:
-        json.dump(config_dict, f, indent=2)
-
-    if cfg.use_mlflow:
-        # Log final metrics
+    # Log final metrics and close MLflow run if started
+    if mlflow_run_started:
         mlflow.log_metrics({
-            "final_val_loss": final_val_loss,
-            "total_training_time": time.time() - start_time
+            'final_val_loss': final_val_loss,
+            'best_val_loss': min(best_val_loss, final_val_loss),
+            'total_training_time': total_time
         })
+        mlflow.set_tag("training_status", "completed")
+        mlflow.end_run()
 
-        # Log the model artifact
-        logger.info("Logging model to MLflow...")
-        mlflow.pytorch.log_model(
-            model,
-            "model",
-            registered_model_name=f"transformer_lm_{cfg.d_model}d_{cfg.num_layers}l"
+    return {
+        'final_val_loss': final_val_loss,
+        'best_val_loss': min(best_val_loss, final_val_loss),
+        'train_losses': losses,
+        'val_losses': val_losses,
+        'total_time': total_time,
+        'final_train_loss': np.mean(losses[-100:]) if losses else float('inf')
+    }
+
+
+def main():
+    cfg = parse_args()
+
+    torch.manual_seed(cfg.seed)
+    np.random.seed(cfg.seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(cfg.seed)
+    torch.autograd.set_detect_anomaly(True)
+
+    # Create checkpoint directory if it doesn't exist
+    os.makedirs(cfg.checkpoint_dir, exist_ok=True)
+
+    # Load data with memory mapping
+    logger.info("Loading training data...")
+    train_data = load_data_with_memmap_and_assert(cfg.vocab_size, cfg.train_path)
+    logger.info(f"Training data shape: {train_data.shape}")
+
+    logger.info("Loading validation data...")
+    valid_data = load_data_with_memmap_and_assert(cfg.vocab_size, cfg.valid_path)
+    logger.info(f"Validation data shape: {valid_data.shape}")
+
+    # Initialize model
+    logger.info(f"Initializing model with {cfg.num_layers} layers...")
+    model = TransformerLM(
+        d_model=cfg.d_model,
+        num_heads=cfg.num_heads,
+        d_ff=cfg.d_ff,
+        theta=cfg.rope_theta,
+        max_seq_len=cfg.max_seq_len,
+        vocab_size=cfg.vocab_size,
+        num_layers=cfg.num_layers
+    ).to(cfg.device)
+
+    # Count parameters
+    total_params = sum(p.numel() for p in model.parameters())
+    logger.info(f"Total parameters: {total_params:,}")
+
+    # Initialize optimizer
+    if cfg.optimizer_type == "adamw":
+        optimizer = AdamW(
+            model.parameters(),
+            lr=cfg.lr,
+            weight_decay=cfg.weight_decay,
+            betas=cfg.betas,
+            eps=cfg.eps
+        )
+    else:  # sgd
+        optimizer = SGD(model.parameters(), lr=cfg.lr)
+
+    # Resume from checkpoint if specified
+    start_step = 0
+    if cfg.resume_from_checkpoint:
+        logger.info(f"Resuming from checkpoint: {cfg.resume_from_checkpoint}")
+        start_step = load_checkpoint(cfg.resume_from_checkpoint, model, optimizer)
+        logger.info(f"Resumed from step {start_step}")
+
+    # Training loop
+    logger.info(f"Starting training on {cfg.device}...")
+    logger.info(f"Batch size: {cfg.batch_size}, Context length: {cfg.context_length}")
+    logger.info(f"Max steps: {cfg.max_steps}")
+
+    try:
+        # Use the refactored training function
+        results = train_model(
+            model=model,
+            optimizer=optimizer,
+            train_data=train_data,
+            valid_data=valid_data,
+            cfg=cfg,
+            start_step=start_step,
+            use_mlflow=cfg.use_mlflow
         )
 
-        # Log checkpoint directory as artifact
-        mlflow.log_artifacts(final_checkpoint_path, "final_checkpoint")
+        # Log final results
+        logger.info("Training completed!")
+        logger.info(f"Final validation loss: {results['final_val_loss']:.4f}")
+        logger.info(f"Best validation loss: {results['best_val_loss']:.4f}")
+        logger.info(f"Total time: {results['total_time']:.1f} seconds")
 
-        # End the MLflow run
-        mlflow.end_run()
+        # Save final checkpoint
+        final_checkpoint_path = os.path.join(cfg.checkpoint_dir, "final_checkpoint")
+        logger.info(f"Saving final checkpoint to {final_checkpoint_path}")
+        os.makedirs(final_checkpoint_path, exist_ok=True)
+
+        torch.save(model.state_dict(), os.path.join(final_checkpoint_path, "model.pt"))
+        torch.save(optimizer.state_dict(), os.path.join(final_checkpoint_path, "optimizer.pt"))
+
+        config_dict = {
+            "iteration": cfg.max_steps,
+            "config": asdict(cfg),
+            "final_val_loss": results['final_val_loss'],
+            "best_val_loss": results['best_val_loss']
+        }
+        with open(os.path.join(final_checkpoint_path, "config.json"), 'w') as f:
+            json.dump(config_dict, f, indent=2)
+
+    except Exception as e:
+        # Error handling already done in train_model
+        raise
 
     logger.info("Training script completed successfully!")
 

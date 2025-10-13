@@ -33,7 +33,7 @@ class TrainConfig:
     eps: float = 1e-8
 
     # Learning rate schedule
-    use_lr_schedule: bool = True
+    use_lr_schedule: bool = False
     max_lr: float = 6e-4
     min_lr: float = 6e-5
     warmup_iters: int = 2000
