@@ -100,6 +100,16 @@ class RMSNorm(nn.Module):
         return rms_norm.to(in_dtype)
 
 
+class SiLU(nn.Module):
+
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        out = einsum(x, torch.sigmoid(x), "..., ... -> ...")
+        return out
+
+
 class SwiGLUFeedForward(nn.Module):
 
     def __init__(self, d_model: int, d_ff: int, device=None, dtype=None):
@@ -117,12 +127,13 @@ class SwiGLUFeedForward(nn.Module):
 
         self.d_ff = d_ff
         self.weight1 = _init_weights(self.d_ff, d_model)
+        self.silu = SiLU()
         self.weight2 = _init_weights(d_model, self.d_ff)
         self.weight3 = _init_weights(self.d_ff, d_model)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         w1x = einsum(self.weight1, x, "d_ff d_model, ... d_model -> ... d_ff")
-        silu = einsum(w1x, torch.sigmoid(w1x), "..., ... -> ...")
+        silu = self.silu(w1x)
         w3x = einsum(self.weight3, x, "d_ff d_model, ... d_model -> ... d_ff")
         dot_product = einsum(silu, w3x, "..., ... -> ...")
         swiglu = einsum(self.weight2, dot_product, "d_model d_ff, ... d_ff -> ... d_model")
@@ -249,10 +260,18 @@ class MultiHeadSelfAttention(nn.Module):
             self.max_seq_len = max_seq_len
             self.rope = RotaryPositionalEmbedding(theta, self.d_k // num_heads, self.max_seq_len)
 
-        self.q_proj = nn.Parameter(torch.zeros((self.d_k, self.d_model)))
-        self.k_proj = nn.Parameter(torch.zeros((self.d_k, self.d_model)))
-        self.v_proj = nn.Parameter(torch.zeros((self.d_k, self.d_model)))
-        self.o_proj = nn.Parameter(torch.zeros((self.d_model, self.d_k)))
+        def _proj(out_dim, in_dim, dtype=None, device=None):
+            sigma = np.sqrt(2 / (in_dim + out_dim))
+            w = nn.init.trunc_normal_(
+                torch.empty(out_dim, in_dim, dtype=dtype, device=device),
+                mean=0, std=sigma, a=-3 * sigma, b=3 * sigma
+            )
+            return nn.Parameter(w)
+
+        self.q_proj = _proj(self.d_k, self.d_model, dtype=torch.float32)
+        self.k_proj = _proj(self.d_k, self.d_model, dtype=torch.float32)
+        self.v_proj = _proj(self.d_k, self.d_model, dtype=torch.float32)
+        self.o_proj = _proj(self.d_model, self.d_k, dtype=torch.float32)
 
         self.attn_blocks = [ScaledDotProdAttention() for _ in range(num_heads)]
 
@@ -270,6 +289,9 @@ class MultiHeadSelfAttention(nn.Module):
                                                                                           i * d_k: (i + 1) * d_k]
 
             if self.apply_rope:
+                if token_positions is None:
+                    token_positions = torch.arange(x.size(1), device=x.device)
+
                 q = self.rope(q, token_positions)
                 k = self.rope(k, token_positions)
 
@@ -309,12 +331,10 @@ class TransformerBlock(nn.Module):
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        pre_shape = x.shape
-        x += self.block(x)
-        x += self.block2(x)
-
-        assert x.shape == pre_shape
-        return x
+        z = x + self.block(x)
+        out = z + self.block2(z)
+        assert out.shape == x.shape
+        return out
 
 
 class TransformerLM(nn.Module):
@@ -362,9 +382,11 @@ def cross_entropy_loss(logits: torch.Tensor, targets: torch.Tensor) -> torch.Ten
 
 def gradient_clipping(parameters: Iterable[torch.nn.Parameter], max_l2_norm: float):
     grads = [parameter.grad for parameter in parameters if parameter.grad is not None]
-    grad_norm = torch.linalg.vector_norm(torch.stack(grads))
+
+    norms: list[torch.Tensor] = []
+    norms.extend([torch.linalg.vector_norm(grad) for grad in grads])
+    grad_norm = torch.linalg.vector_norm(torch.stack(norms))
     if grad_norm > max_l2_norm:
         for parameter in parameters:
             if parameter.grad is not None:
                 parameter.grad *= (max_l2_norm / (grad_norm + 1e-6))
-

@@ -3,6 +3,8 @@ import pathlib
 import cProfile
 import pstats
 import pickle
+
+import pytest
 from viztracer import VizTracer
 
 from tests.adapters import run_train_bpe
@@ -19,6 +21,7 @@ class TestTrainBPEOpenWebText(unittest.TestCase):
     def tearDown(self):
         pass
 
+    @pytest.mark.skip()
     def test_train_bpe_owt_c_profiler(self):
         self.profiler.enable()
 
