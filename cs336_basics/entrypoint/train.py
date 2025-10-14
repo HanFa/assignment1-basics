@@ -349,7 +349,6 @@ def main():
     np.random.seed(cfg.seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed(cfg.seed)
-    torch.autograd.set_detect_anomaly(True)
 
     # Create checkpoint directory if it doesn't exist
     os.makedirs(cfg.checkpoint_dir, exist_ok=True)
