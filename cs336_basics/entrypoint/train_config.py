@@ -46,7 +46,7 @@ class TrainConfig:
     # Training configurations
     batch_size: int = 32
     context_length: int = 1024
-    max_steps: int = 100000
+    max_steps: int = 20000
     eval_interval: int = 500
     eval_steps: int = 100
     log_interval: int = 10
@@ -79,11 +79,12 @@ class SampleConfig(TrainConfig):
     max_seq_len: int = 256
     batch_size: int = 64
     context_length: int = 256
-    lr: float = 6e-4
-    max_lr: float = 6e-4
+    lr: float = 1e-3
+    max_lr: float = 1e-3
     min_lr: float = 6e-5
-    warmup_iters: int = 2000
-    mlflow_experiment_name: str = "sample-model-testing"
+    checkpoint_interval: int = 5000
+    warmup_iters: int = 100
+    mlflow_experiment_name: str = "baseline-lm"
 
 
 @dataclass

@@ -154,7 +154,7 @@ Forward pass: 9.2 TFLOPs per step (6N rule: 6 × 1.5B × 1,024 tokens). Total pe
 pass overhead).
 Hence time per step is 2.84 sec and tototal time is 13.1 days.
 
-# Problem `train_together`
+# Problem `train_together/learning_rate`
 
 I've implemented the training loop logics at [./cs336_basics/entrypoint/train.py](./cs336_basics/entrypoint/train.py).
 
@@ -165,6 +165,17 @@ in [mlflow](https://mlflow.sutroplanet.com/#/experiments/129/runs/5556912c70c84e
 
 Sweep w. different
 LRs [mlflow](https://mlflow.sutroplanet.com/#/compare-runs?runs=[%22c5ff3b9b6a71423585bfe03e24e6a5da%22,%2286d7a7f3b39c4b8ca0cb9cb3ad9ff80c%22,%22eee8b94b0f3f4dc0af95c26b0d3bfab9%22,%22ad18da63ee184941ace4aa549b6c40c2%22,%222f23bdbedce34f718a3641bad1755886%22,%22cb776da7b9944643aa576f0328c60627%22,%2292817e37789b4cbe9d3d5304baf05120%22]&experiments=[%22129%22])
-and it shows the best constant LR for AdamW is around 1e-3.
+and it shows the best constant LR for AdamW is around 1e-3. Using this setup ultimately gave us nats CE loss around
+1.45 after more training,
+see [mlflow run](https://mlflow.sutroplanet.com/#/experiments/130/runs/8f6cec5c9c624922baf950062dfcbca1).
+
+# Problem `decoding`
+
+An interactive, decoding script that allows top-k/top-p sampling has been implemented
+at [./cs336_basics/entrypoint/inference.py](./cs336_basics/entrypoint/inference.py).
+
+Example conversation looks like below.
+
+![Example inference](./images/example-inference.png)
 
 
